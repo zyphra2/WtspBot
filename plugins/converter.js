@@ -1,35 +1,44 @@
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
-const ffmpeg = require('fluent-ffmpeg');
-const fs = require('fs');
-const path = require('path');
+const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 
 module.exports = {
-    commands: ['s', 'sticker', 'wm'],
+    commands: ['steal', 'wm', 'take'],
     execute: async (sock, m, args, config) => {
-        const messageType = Object.keys(m.message)[0];
-        const isImage = messageType === 'imageMessage' || (messageType === 'extendedTextMessage' && m.message.extendedTextMessage.contextInfo?.quotedMessage?.imageMessage);
-
-        if (!isImage) return sock.sendMessage(m.key.remoteJid, { text: "Please reply to an image with *.sticker*" });
-
-        // Identify where the image is (direct or quoted)
-        const quota = m.message.imageMessage || m.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage;
-        const stream = await downloadContentFromMessage(quota, 'image');
+        const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
         
-        let buffer = Buffer.from([]);
-        for await (const chunk of stream) { buffer = Buffer.concat([buffer, chunk]); }
+        // Check if the quoted message is a sticker
+        if (!quoted || !quoted.stickerMessage) {
+            return sock.sendMessage(m.key.remoteJid, { text: "🏷️ Please reply to a sticker with *.steal* to rebrand it." });
+        }
 
-        const tempInput = `./temp_${Date.now()}.jpg`;
-        const tempOutput = `./temp_${Date.now()}.webp`;
+        // Custom names from arguments or defaults from config
+        const packName = args[0] || "AyaTech Pack";
+        const authorName = args[1] || "digitera.io 🇲🇦";
 
-        fs.writeFileSync(tempInput, buffer);
+        await sock.sendMessage(m.key.remoteJid, { text: "🪄 Rebranding sticker..." });
 
-        ffmpeg(tempInput)
-            .outputOptions(["-vcodec", "libwebp", "-vf", "scale='min(320,iw)':min'(320,ih)':force_original_aspect_ratio=decrease,fps=15, pad=320:320:(320-iw)/2:(320-ih)/2:color=00000000,setsar=1,variable_fps=1"])
-            .save(tempOutput)
-            .on('end', async () => {
-                await sock.sendMessage(m.key.remoteJid, { sticker: fs.readFileSync(tempOutput) }, { quoted: m });
-                fs.unlinkSync(tempInput);
-                fs.unlinkSync(tempOutput);
+        try {
+            // Download the existing sticker
+            const stream = await downloadContentFromMessage(quoted.stickerMessage, 'sticker');
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) {
+                buffer = Buffer.concat([buffer, chunk]);
+            }
+
+            // Re-create sticker with NEW metadata
+            const sticker = new Sticker(buffer, {
+                pack: packName,
+                author: authorName,
+                type: StickerTypes.FULL,
+                quality: 70,
             });
+
+            const stickerBuffer = await sticker.toBuffer();
+            await sock.sendMessage(m.key.remoteJid, { sticker: stickerBuffer }, { quoted: m });
+
+        } catch (error) {
+            console.error(error);
+            await sock.sendMessage(m.key.remoteJid, { text: "❌ Failed to steal sticker." });
+        }
     }
 };
